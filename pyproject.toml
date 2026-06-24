@@ -1,0 +1,15 @@
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fdicfs"
+version = "0.1.0"
+dependencies = ["pandas"]
+
+[tool.setuptools.packages.find]
+include = ["fdicfs*"]
+
+
+
