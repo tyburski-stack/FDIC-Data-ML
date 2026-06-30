@@ -62,17 +62,18 @@ is a finding, not a flaw.
 | 3 | `calendar.py` | Business-day calendar. Resolves what "T-1" means across weekends, holidays, and month boundaries. Uses a real calendar library — never hand-rolled. | **Built & tested** |
 | 4 | `features.py` | `get_features_asof(T)` — the centerpiece. Pulls ≤ T-1 snapshots *through snapshot.py*, builds lagged + cyclical + scheduled-event features. Structurally incapable of touching the T snapshot. | **Built**, guarded by the poison test |
 | 5 | `test_poison.py` | **The real deliverable.** Corrupts the T snapshot (balance *and* schedule), asserts feature output is byte-identical. If T can't move the features, the boundary provably holds. | **Built & passing — now guarding the real `features.py`** |
-| 6 | `dataset.py` | Walks the date range, pairs each ≤ T-1 feature vector with its day-T label. The *only* place T is read — and there it is the label. | Planned (next) |
-| 7 | `validation.py` | Walk-forward / expanding-window splits, never random. Validation design is the hard part; the model through it is commodity. | Planned |
+| 6 | `dataset.py` | Walks the date range, pairs each ≤ T-1 feature vector with its day-T label. The *only* place T is read — and there it is the label. | **Built & tested** |
+| 7 | `validation.py` | Walk-forward / expanding-window splits, never random. Validation design is the hard part; the model through it is commodity. | **Built & tested** |
 
 Pieces 1 and 5 were built as a **pair, early** — the test is how you know the
 rest is correct as you build it. The **calendar + snapshot** cluster (pieces 3
 and 2) was built and tested behind it, and **features.py (piece 4)** was built
-on top of the snapshot chokepoint. The final connecting move is now done: the
-poison test's import was re-pointed from the deleted `features_stub.py` to the
-real `features.py` (the one-line change the architecture was built around), so
-the boundary proof guards the real feature builder rather than a throwaway.
-**dataset.py (piece 6) is next.**
+on top of the snapshot chokepoint. The connecting move — re-pointing the poison
+test's import from the deleted `features_stub.py` to the real `features.py` — is
+done, so the boundary proof guards the real feature builder. The final cluster,
+**dataset + validation (pieces 6 and 7)**, is now built and tested on top of
+that. All seven pieces are complete and data-independent; the only work left is
+the Snowflake swap, which stays blocked on access.
 
 ---
 
@@ -87,18 +88,19 @@ fdic-feature-store/
 │   ├── calendar.py             # piece 3 — resolves T-1 across boundaries (built & tested)
 │   ├── snapshot.py             # piece 2 — as-of read interface, the chokepoint (built & tested)
 │   ├── features.py             # piece 4 — get_features_asof(T) (built; poison-guarded)
-│   ├── dataset.py              # piece 6 — pairs features with label
-│   ├── validation.py           # piece 7 — walk-forward splits
+│   ├── dataset.py              # piece 6 — pairs features with label (built & tested)
+│   ├── validation.py           # piece 7 — walk-forward splits (built & tested)
 │   ├── sources/                # swappable backends behind snapshot.py
 │   │   ├── synthetic.py        #   hand-built table, known answers (built)
 │   │   └── snowflake.py        #   swap in when access lands
 │   └── _config.py              # date ranges, entity slice
 ├── tests/
 │   ├── test_poison.py          # piece 5 — THE deliverable (passing, guards real features.py)
-│   ├── test_contract.py        # well-formedness + guards fire on bad input (built, 24 tests)
+│   ├── test_contract.py        # well-formedness, guards fire (passing, 24 tests)
 │   ├── test_calendar.py        # boundaries, gaps (passing)
 │   ├── test_snapshot.py        # chokepoint guarantees (passing)
-│   └── test_features.py        # hand-computed spot checks vs synthetic fixture (built, 19 tests)
+│   ├── test_features.py        # hand-computed spot checks (passing, 19 tests)
+│   └── test_validation.py      # walk-forward boundary, date-grouping, guard (passing, 30 tests)
 ├── notebooks/                  # exploration, predictability decomposition
 ├── docs/
 │   ├── temporal_contract.md    # plain-language companion (built)
@@ -190,15 +192,14 @@ leaving the others clean.
 ## Build strategy (≈ 3 weeks)
 
 1. **During the Snowflake-access wait** (now): build the data-independent
-   pieces. Done so far: the contract; the poison test against a hand-fabricated
-   synthetic table with known answers; the calendar (T-1 across
-   weekend/holiday/month boundaries); the snapshot chokepoint over it; and the
-   real feature builder (`features.py`) with the poison test re-pointed at it;
-   and the two former-placeholder test suites (`test_contract.py`,
-   `test_features.py`) now written and passing.
+   pieces. This is done — all seven: the contract; the poison test against a
+   hand-fabricated synthetic table with known answers; the calendar (T-1 across
+   weekend/holiday/month boundaries); the snapshot chokepoint over it; the real
+   feature builder (`features.py`) with the poison test re-pointed at it; the
+   dataset assembler (`dataset.py`); and walk-forward validation
+   (`validation.py`) — plus the full pytest suite (105 tests) behind them.
    Synthetic data is *better* than real data for testing logic — known answers,
-   and it forces the assumed schema to be written down as a checklist. Still
-   buildable without access: `dataset.py` and `validation.py`.
+   and it forces the assumed schema to be written down as a checklist.
 2. **When access lands:** swap the synthetic source for the Snowflake snapshot
    layer on a narrow entity slice (a few portfolio purposes, bounded date
    range). Get all 7 pieces working end-to-end, then widen.
@@ -210,7 +211,7 @@ validated — and the validation is the part worth anything.
 
 ## Current status
 
-**Three clusters done, all data-independent:**
+**Four clusters done, all data-independent — the build is feature-complete:**
 
 - **Cluster 1 — contract + poison test + synthetic source.** `contract.py` (+
   its plain-language companion) self-checks pass; `sources/synthetic.py` is a
@@ -238,52 +239,44 @@ validated — and the validation is the part worth anything.
   validated against the contract as a declared FEATURE column. The two
   relative-time helpers live in `calendar.py` (one home for date logic) with
   hand-verified tests. `features_stub.py` was deleted — its history lives in git.
+- **Cluster 4 — dataset + validation.** `dataset.py` (piece 6) walks a date
+  range business day by business day and turns each into one training example —
+  features (≤ T-1, from `features.py`) paired with the day-T label (the one
+  legitimate read of T, via `snapshot.label_asof`). Three outcomes per day:
+  example built, ramp-up skip (no ≤ T-1 history yet), or missing-label skip (a
+  day past the data / in the future). A `BuildReport` returns the skipped dates
+  as data, not just log lines, and rows come out ascending by `prediction_date`
+  — the time order walk-forward depends on. `validation.py` (piece 7) is the
+  walk-forward / expanding-window splitter: it splits on **unique dates** (so
+  many rows sharing a date — e.g. multiple portfolios — never straddle the
+  train/test boundary), enforces *train strictly before test* mechanically
+  (raising the contract's own `LeakageError` if violated), and supports rolling
+  windows (`max_train_size`) and an embargo `gap` (0 here, correct for a
+  point-in-time single-day label). A thin harness runs any model callable across
+  the folds and returns per-fold MAE/RMSE plus the out-of-fold prediction track,
+  benchmarked against a persistence baseline.
 
-**Test-coverage note — both placeholder gaps now closed.** The two empty test
-files have been written and pass; the full suite is **75 tests green**.
-- `tests/test_contract.py` (24 tests) — exercises the *unhappy path* the rest of
-  the suite never did: that the `LeakageError` guards actually **refuse** bad
-  input rather than only waving good input through. `assert_is_legal_feature`
-  raises on a FORBIDDEN column, on the bare LABEL read as a feature, and on
-  METADATA (and `KeyError` on an undeclared column — "never declared" is a
-  distinct failure from "declared but illegal"). `assert_feature_date_is_legal`
-  is pinned at the `< T` boundary (legal at T-1, leaks at `== T` and after) for
-  both lag rules. The well-formedness checker is given teeth by monkeypatching
-  `COLUMN_SPECS` with deliberately broken specs (duplicate names, zero/two
-  labels, a feature with no lag rule, a label carrying a lag) and asserting each
-  is rejected. Before this file, `LeakageError` had never been triggered by any
-  test.
-- `tests/test_features.py` (19 tests) — closes the gap the poison test cannot:
-  poison proves the output does not *change* under corruption, never that it is
-  *correct* (an empty dict would also be unmoved). This file pins the exact
-  values against the known synthetic fixture — every `_lag1` value is asserted to
-  equal the T-1 number *and* to differ from the T trap (`mmkt_balance_lag1 ==
-  300.0`, not `9_999_999`; `portfolio_purpose == "operating"`, not the reassigned
-  `"REASSIGNED"`). Relative-time features are independently re-derived through
-  `calendar.*`, and `type()` checks guard against numpy scalars sneaking into the
-  dict that `dataset.py` will compare with `==`.
+**Test coverage — the full suite is 105 tests, all green.** Every pipeline layer
+has a dedicated file: `test_calendar.py` (boundary/gap math), `test_snapshot.py`
+(chokepoint guarantees), `test_poison.py` (the boundary proof + its teeth test),
+`test_contract.py` (24 — the `LeakageError` guards actually fire on FORBIDDEN /
+bare-label / metadata / past-T inputs, and `assert_contract_is_wellformed` is
+given teeth via monkeypatched broken specs), `test_features.py` (19 — exact
+feature values pinned against the synthetic fixture; every `_lag1` value asserted
+`== T-1` and `!= T` trap), and `test_validation.py` (30 — the strictly-before
+boundary, whole-date grouping under multiple rows per date, disjoint test folds,
+expanding-vs-rolling, the gap embargo, the `LeakageError` guard firing when the
+timeline is forced out of order, the metrics, and the harness). Together: poison
+proves the boundary holds; `test_features` proves the output inside it is right;
+`test_contract` proves the rules stop you when you cross them; `test_validation`
+proves the *evaluation* can't shuffle time either.
 
-Together: **test_poison proves the boundary holds; test_features proves the
-output inside that boundary is right; test_contract proves the rules defining the
-boundary will stop you when you cross them.** This green-and-meaningful suite is
-the foundation `dataset.py` now builds on.
-
-**Note — test_features.py stays pointed at synthetic.** It is the known-answer
-oracle, so on the Snowflake swap it remains against the synthetic fixture while
-`dataset.py` is what runs against both backends. This matches the "synthetic is
-the test oracle" design — it is not a file that migrates.
-
-**Next:** `dataset.py` (piece 6) — walk the date range, pair each ≤ T-1 feature
-vector (from `features.py`) with its day-T label (from `snapshot.label_asof`).
-The only place T is read, and there it is the label. This is where the row-sort
-contract and the empty-window guard get exercised across a real range rather
-than a single T. **Decided:** ramp-up days at the start of the range (where the
-≤ T-1 window is empty and `features_asof` raises) are handled
-**skip-with-a-logged-count** — you cannot train on no history, and a silent error
-on the first valid-looking date is a worse surprise than a reported skip.
-
-**Still blocked on Snowflake access:** the swap (`sources/snowflake.py`) and the
-open items below.
+**Next:** nothing data-independent remains — the pipeline is complete end-to-end
+against the synthetic source. The remaining work is the **Snowflake swap**: drop
+`sources/snowflake.py` in behind the chokepoint (same two read signatures as
+`synthetic.py`) on a narrow entity slice, flip the source at the `features.py`
+and `dataset.py` call sites in lockstep, and run all 7 pieces against real data.
+The same poison and validation tests run unchanged.
 
 ---
 

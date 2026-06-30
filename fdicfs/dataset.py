@@ -107,7 +107,7 @@ def _business_days(start: dt.date, end: dt.date):
     which behaves correctly in an `if`). Ascending order is load-bearing: the
     rows come out time-ordered, which is exactly what walk-forward validation
     (piece 7) needs — it must never shuffle time.
-    """
+    """ 
     cur = start
     while cur <= end:
         if calendar.is_business_day(cur):

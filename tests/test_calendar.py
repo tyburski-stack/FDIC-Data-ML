@@ -85,11 +85,6 @@ def test_business_day_T_does_not_return_itself():
     T = dt.date(2025, 6, 25)
     assert prior_business_day(T) != T
 
-
-# ---------------------------------------------------------------------------
-# TODO for you — verify these dates by hand, then fill in the expected answer
-# ---------------------------------------------------------------------------
-
 def test_tuesday_after_labor_day():
     # Labor Day 2025 = Monday Sept 1. T = Tuesday Sept 2.
     # What should prior_business_day return? Work it out and assert it.
